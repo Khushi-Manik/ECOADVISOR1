@@ -1,0 +1,114 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.ensemble import RandomForestRegressor
+
+# Load the data
+data = pd.read_csv('household_power_consumption.txt', sep=';', na_values='?', parse_dates={'datetime': ['Date', 'Time']})
+
+# Drop rows with missing values
+data.dropna(inplace=True)
+
+# Convert datetime column to datetime type
+data['datetime'] = pd.to_datetime(data['datetime'], format='%d/%m/%Y %H:%M:%S')
+
+# Rename sub metering columns
+data.rename(columns={'Sub_metering_1': 'Kitchen', 'Sub_metering_2': 'Laundry', 'Sub_metering_3': 'Bedroom'}, inplace=True)
+
+# Set up the Streamlit app
+st.title('Energy Consumption Analysis')
+
+# Display the data
+st.subheader('Data Preview')
+st.write(data.head())
+
+# Year selection
+st.subheader('Select Year')
+selected_year = st.selectbox('Choose a year:', sorted(data['datetime'].dt.year.unique()))
+
+# Filter data based on the selected year
+data_year = data[data['datetime'].dt.year == selected_year]
+
+# Display filtered data
+st.write(data_year.head())
+
+# Interactive data filtering
+st.subheader('Filter Data')
+start_date = st.date_input('Start date', data_year['datetime'].min().date())
+end_date = st.date_input('End date', data_year['datetime'].max().date())
+filtered_data = data_year[(data_year['datetime'] >= pd.Timestamp(start_date)) & (data_year['datetime'] <= pd.Timestamp(end_date))]
+
+# Weekly energy consumption
+st.subheader(f'Weekly Energy Consumption ({selected_year})')
+filtered_data['week'] = filtered_data['datetime'].dt.isocalendar().week
+weekly_consumption = filtered_data.groupby('week')['Global_active_power'].sum()
+
+# Display weekly consumption
+st.line_chart(weekly_consumption)
+
+# Daily power consumption
+st.subheader(f'Daily Power Consumption ({selected_year})')
+daily_consumption = filtered_data.resample('D', on='datetime')['Global_active_power'].sum()
+
+# Plot daily consumption
+fig, ax = plt.subplots()
+ax.plot(daily_consumption.index, daily_consumption.values)
+ax.set_xlabel('Date')
+ax.set_ylabel('Daily Global Active Power (kW)')
+ax.set_title(f'Daily Power Consumption ({selected_year})')
+st.pyplot(fig)
+
+# Cost estimation
+st.subheader('Cost Estimation')
+cost_per_kwh = st.number_input('Enter your power per kWh (in INR)', value=12.30)  # Updated cost per kWh in INR
+
+# Calculate total cost in INR
+total_energy_consumed = filtered_data['Global_active_power'].sum()  # Total energy consumed in kWh
+total_cost_inr = total_energy_consumed * cost_per_kwh
+st.write(f'Total estimated cost of energy consumption for {selected_year}: {total_cost_inr:.2f} INR')
+
+# Forecasting future consumption based on selected year data
+st.subheader('Forecasting Future Consumption')
+train_size = st.slider('Select training data size (percentage)', 50, 90, 80)
+train_data = daily_consumption[:int(len(daily_consumption) * (train_size / 100))]
+test_data = daily_consumption[int(len(daily_consumption) * (train_size / 100)):]
+X_train = np.arange(len(train_data)).reshape(-1, 1)
+y_train = train_data.values
+X_test = np.arange(len(train_data), len(train_data) + len(test_data)).reshape(-1, 1)
+y_test = test_data.values
+
+# Random Forest Regressor for forecasting
+rf_model = RandomForestRegressor()
+rf_model.fit(X_train, y_train)
+forecast = rf_model.predict(X_test)
+
+# Plot forecast
+forecast_period = st.slider('Select forecast period (days)', 7, 365, 30)
+future_dates = pd.date_range(start=daily_consumption.index[-1] + pd.Timedelta(days=1), periods=forecast_period)
+future_X = np.arange(len(daily_consumption), len(daily_consumption) + forecast_period).reshape(-1, 1)
+future_forecast = rf_model.predict(future_X)
+
+fig, ax = plt.subplots()
+ax.plot(train_data.index, train_data.values, label='Training Data')
+ax.plot(test_data.index, test_data.values, label='Test Data')
+ax.plot(test_data.index, forecast, label='Forecast', linestyle='--')
+ax.plot(future_dates, future_forecast, label='Future Forecast', linestyle='-.')
+ax.set_xlabel('Date')
+ax.set_ylabel('Daily Global Active Power (kW)')
+ax.set_title(f'Daily Power Consumption Forecast ({selected_year})')
+ax.legend()
+st.pyplot(fig)
+
+# Devices consuming the most power
+st.subheader(f'Devices Consuming the Most Power ({selected_year})')
+device_consumption = filtered_data[['Kitchen', 'Laundry', 'Bedroom']].sum()
+st.write('Total power consumption by device:')
+st.write(device_consumption)
+
+fig, ax = plt.subplots()
+device_consumption.plot(kind='bar', ax=ax)
+ax.set_xlabel('Device')
+ax.set_ylabel('Total Power Consumption (kWh)')
+ax.set_title(f'Power Consumption by Device ({selected_year})')
+st.pyplot(fig)
